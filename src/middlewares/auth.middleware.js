@@ -22,7 +22,7 @@ const authenticate = async (req, res, next) => {
 
     const { rows } = await query(
       `SELECT id, email, full_name, role, is_email_verified, is_blocked, blocked_reason
-       FROM profiles WHERE id = $1`,
+       FROM users WHERE id = $1`,
       [decoded.id]
     );
     const user = rows[0];
@@ -52,7 +52,7 @@ const optionalAuth = async (req, res, next) => {
       const decoded = verifyAccessToken(token);
       const { rows } = await query(
         `SELECT id, email, full_name, role, is_email_verified, is_blocked
-         FROM profiles WHERE id = $1`,
+         FROM users WHERE id = $1`,
         [decoded.id]
       );
       if (rows[0] && !rows[0].is_blocked) req.user = rows[0];

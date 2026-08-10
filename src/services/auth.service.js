@@ -70,8 +70,8 @@ const findValidEmailToken = async (rawToken, type) => {
 
 const getSetupStatus = async () => {
   const [usersRes, adminRes] = await Promise.all([
-    query('SELECT COUNT(*)::int AS total FROM profiles'),
-    query(`SELECT COUNT(*)::int AS total FROM profiles WHERE role = 'admin'`),
+    query('SELECT COUNT(*)::int AS total FROM users'),
+    query(`SELECT COUNT(*)::int AS total FROM users WHERE role = 'admin'`),
   ]);
   const totalUsers = usersRes.rows[0].total;
   const adminCount = adminRes.rows[0].total;
@@ -101,7 +101,7 @@ const register = async ({ email, password, full_name, role = 'job_seeker', phone
     }
   }
 
-  const existing = await query('SELECT id FROM profiles WHERE email = $1', [email.toLowerCase()]);
+  const existing = await query('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
   if (existing.rows[0]) {
     throw new AppError('An account with this email already exists.', 409);
   }
@@ -113,7 +113,7 @@ const register = async ({ email, password, full_name, role = 'job_seeker', phone
   let user;
   try {
     const result = await query(
-      `INSERT INTO profiles (email, password_hash, full_name, role, phone, is_email_verified)
+      `INSERT INTO users (email, password_hash, full_name, role, phone, is_email_verified)
        VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
       [email.toLowerCase(), password_hash, full_name, finalRole, phone || null, isVerified]
@@ -137,7 +137,7 @@ const register = async ({ email, password, full_name, role = 'job_seeker', phone
     const verifyToken = await storeEmailToken(user.id, 'email_verification', 24);
     const emailResult = await emailService.sendVerificationEmail(user, verifyToken);
     if (emailResult?.success === false && process.env.NODE_ENV !== 'production') {
-      await query('UPDATE profiles SET is_email_verified = true WHERE id = $1', [user.id]);
+      await query('UPDATE users SET is_email_verified = true WHERE id = $1', [user.id]);
       user.is_email_verified = true;
       console.warn(
         `[DEV] Email send failed — auto-verified ${user.email}. Fix SendGrid sender verification for real emails.`
@@ -148,7 +148,7 @@ const register = async ({ email, password, full_name, role = 'job_seeker', phone
   } catch (err) {
     console.error('Verification email failed:', err.message);
     if (process.env.NODE_ENV !== 'production') {
-      await query('UPDATE profiles SET is_email_verified = true WHERE id = $1', [user.id]);
+      await query('UPDATE users SET is_email_verified = true WHERE id = $1', [user.id]);
       user.is_email_verified = true;
     }
   }
@@ -165,7 +165,7 @@ const verifyEmail = async (token) => {
   if (!record) throw new AppError('Invalid or expired verification token.', 400);
 
   const { rows } = await query(
-    `UPDATE profiles SET is_email_verified = true WHERE id = $1 RETURNING *`,
+    `UPDATE users SET is_email_verified = true WHERE id = $1 RETURNING *`,
     [record.user_id]
   );
   if (!rows[0]) throw new AppError('Failed to verify email.', 500);
@@ -179,7 +179,7 @@ const verifyEmail = async (token) => {
 };
 
 const resendVerification = async (email) => {
-  const { rows } = await query('SELECT * FROM profiles WHERE email = $1', [email.toLowerCase()]);
+  const { rows } = await query('SELECT * FROM users WHERE email = $1', [email.toLowerCase()]);
   const user = rows[0];
   if (!user) {
     return { message: 'If an account exists with this email, a verification link has been sent.' };
@@ -192,7 +192,7 @@ const resendVerification = async (email) => {
 };
 
 const login = async ({ email, password }, meta = {}) => {
-  const { rows } = await query('SELECT * FROM profiles WHERE email = $1', [email.toLowerCase()]);
+  const { rows } = await query('SELECT * FROM users WHERE email = $1', [email.toLowerCase()]);
   const user = rows[0];
   if (!user) throw new AppError('Invalid email or password.', 401);
 
@@ -209,7 +209,7 @@ const login = async ({ email, password }, meta = {}) => {
     throw new AppError('Please verify your email before logging in.', 403);
   }
 
-  await query('UPDATE profiles SET last_login_at = NOW() WHERE id = $1', [user.id]);
+  await query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
   const tokens = await createTokenPair(user, meta);
   return { user: sanitizeUser(user), ...tokens };
 };
@@ -240,7 +240,7 @@ const refreshAccessToken = async (refreshToken) => {
   }
   if (!matched) throw new AppError('Refresh token is invalid or has been revoked.', 401);
 
-  const userRes = await query('SELECT * FROM profiles WHERE id = $1', [decoded.id]);
+  const userRes = await query('SELECT * FROM users WHERE id = $1', [decoded.id]);
   const user = userRes.rows[0];
   if (!user || user.is_blocked) throw new AppError('User not found or blocked.', 401);
 
@@ -279,7 +279,7 @@ const logout = async (userId, refreshToken) => {
 };
 
 const forgotPassword = async (email) => {
-  const { rows } = await query('SELECT * FROM profiles WHERE email = $1', [email.toLowerCase()]);
+  const { rows } = await query('SELECT * FROM users WHERE email = $1', [email.toLowerCase()]);
   const user = rows[0];
   if (!user) {
     return { message: 'If an account exists with this email, a password reset link has been sent.' };
@@ -294,7 +294,7 @@ const resetPassword = async (token, newPassword) => {
   if (!record) throw new AppError('Invalid or expired password reset token.', 400);
 
   const password_hash = await hashPassword(newPassword);
-  await query('UPDATE profiles SET password_hash = $1 WHERE id = $2', [
+  await query('UPDATE users SET password_hash = $1 WHERE id = $2', [
     password_hash,
     record.user_id,
   ]);
@@ -309,7 +309,7 @@ const resetPassword = async (token, newPassword) => {
 };
 
 const getMe = async (userId) => {
-  const { rows } = await query('SELECT * FROM profiles WHERE id = $1', [userId]);
+  const { rows } = await query('SELECT * FROM users WHERE id = $1', [userId]);
   const user = rows[0];
   if (!user) throw new AppError('User not found.', 404);
 

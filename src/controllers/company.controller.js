@@ -63,7 +63,7 @@ const getCompanyById = asyncHandler(async (req, res) => {
   const { rows } = await query(
     `SELECT c.*, p.id AS employer_pk, p.full_name AS employer_name
      FROM companies c
-     LEFT JOIN profiles p ON p.id = c.employer_id
+     LEFT JOIN users p ON p.id = c.employer_id
      WHERE c.id = $1`,
     [req.params.id]
   );

@@ -17,7 +17,20 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE token_type AS ENUM ('email_verification', 'password_reset');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
-CREATE TABLE IF NOT EXISTS profiles (
+-- Migrate old table name if present
+DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'profiles'
+  ) AND NOT EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'users'
+  ) THEN
+    ALTER TABLE profiles RENAME TO users;
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS users (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   email VARCHAR(255) NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
@@ -43,13 +56,13 @@ CREATE TABLE IF NOT EXISTS profiles (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_profiles_email ON profiles(email);
-CREATE INDEX IF NOT EXISTS idx_profiles_role ON profiles(role);
-CREATE INDEX IF NOT EXISTS idx_profiles_is_blocked ON profiles(is_blocked);
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+CREATE INDEX IF NOT EXISTS idx_users_is_blocked ON users(is_blocked);
 
 CREATE TABLE IF NOT EXISTS companies (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  employer_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  employer_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   name VARCHAR(255) NOT NULL,
   description TEXT,
   industry VARCHAR(150),
@@ -71,7 +84,7 @@ CREATE INDEX IF NOT EXISTS idx_companies_employer_id ON companies(employer_id);
 CREATE TABLE IF NOT EXISTS jobs (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-  employer_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  employer_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   title VARCHAR(255) NOT NULL,
   description TEXT NOT NULL,
   requirements TEXT,
@@ -104,7 +117,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_created_at ON jobs(created_at DESC);
 CREATE TABLE IF NOT EXISTS applications (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   job_id UUID NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-  applicant_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  applicant_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   cover_letter TEXT,
   resume_url TEXT,
   resume_path TEXT,
@@ -124,7 +137,7 @@ CREATE INDEX IF NOT EXISTS idx_applications_status ON applications(status);
 
 CREATE TABLE IF NOT EXISTS saved_jobs (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   job_id UUID NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT saved_jobs_user_job_unique UNIQUE (user_id, job_id)
@@ -134,7 +147,7 @@ CREATE INDEX IF NOT EXISTS idx_saved_jobs_user_id ON saved_jobs(user_id);
 
 CREATE TABLE IF NOT EXISTS refresh_tokens (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   token_hash TEXT NOT NULL UNIQUE,
   expires_at TIMESTAMPTZ NOT NULL,
   revoked BOOLEAN DEFAULT FALSE,
@@ -149,7 +162,7 @@ CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token_hash ON refresh_tokens(token
 
 CREATE TABLE IF NOT EXISTS email_tokens (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   token_hash TEXT NOT NULL UNIQUE,
   type token_type NOT NULL,
   expires_at TIMESTAMPTZ NOT NULL,
@@ -169,8 +182,9 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS trg_profiles_updated_at ON profiles;
-CREATE TRIGGER trg_profiles_updated_at BEFORE UPDATE ON profiles
+DROP TRIGGER IF EXISTS trg_profiles_updated_at ON users;
+DROP TRIGGER IF EXISTS trg_users_updated_at ON users;
+CREATE TRIGGER trg_users_updated_at BEFORE UPDATE ON users
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 DROP TRIGGER IF EXISTS trg_companies_updated_at ON companies;

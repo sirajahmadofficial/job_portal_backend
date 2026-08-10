@@ -7,7 +7,7 @@ async function seedAdmin() {
   const password = process.env.ADMIN_PASSWORD || 'Admin@12345';
   const full_name = process.env.ADMIN_NAME || 'System Admin';
 
-  const existing = await query('SELECT id, email, role FROM profiles WHERE email = $1', [email]);
+  const existing = await query('SELECT id, email, role FROM users WHERE email = $1', [email]);
   if (existing.rows[0]) {
     console.log(`Admin already exists: ${existing.rows[0].email} (${existing.rows[0].role})`);
     await pool.end();
@@ -16,7 +16,7 @@ async function seedAdmin() {
 
   const password_hash = await hashPassword(password);
   const { rows } = await query(
-    `INSERT INTO profiles (email, password_hash, full_name, role, is_email_verified)
+    `INSERT INTO users (email, password_hash, full_name, role, is_email_verified)
      VALUES ($1, $2, $3, 'admin', true)
      RETURNING id, email, full_name, role`,
     [email, password_hash, full_name]

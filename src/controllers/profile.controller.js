@@ -5,7 +5,7 @@ const storageService = require('../services/storage.service');
 const { sanitizeUser } = require('../services/auth.service');
 
 const getProfile = asyncHandler(async (req, res) => {
-  const { rows } = await query('SELECT * FROM profiles WHERE id = $1', [req.user.id]);
+  const { rows } = await query('SELECT * FROM users WHERE id = $1', [req.user.id]);
   if (!rows[0]) throw new AppError('Profile not found.', 404);
   return ApiResponse.success(res, 200, 'Profile fetched', sanitizeUser(rows[0]));
 });
@@ -32,13 +32,13 @@ const updateProfile = asyncHandler(async (req, res) => {
   });
 
   if (!sets.length) {
-    const current = await query('SELECT * FROM profiles WHERE id = $1', [req.user.id]);
+    const current = await query('SELECT * FROM users WHERE id = $1', [req.user.id]);
     return ApiResponse.success(res, 200, 'Profile updated', sanitizeUser(current.rows[0]));
   }
 
   params.push(req.user.id);
   const { rows } = await query(
-    `UPDATE profiles SET ${sets.join(', ')} WHERE id = $${i} RETURNING *`,
+    `UPDATE users SET ${sets.join(', ')} WHERE id = $${i} RETURNING *`,
     params
   );
   return ApiResponse.success(res, 200, 'Profile updated', sanitizeUser(rows[0]));
@@ -47,14 +47,14 @@ const updateProfile = asyncHandler(async (req, res) => {
 const uploadResume = asyncHandler(async (req, res) => {
   if (!req.file) throw new AppError('Resume file is required.', 400);
 
-  const current = await query('SELECT resume_path FROM profiles WHERE id = $1', [req.user.id]);
+  const current = await query('SELECT resume_path FROM users WHERE id = $1', [req.user.id]);
   if (current.rows[0]?.resume_path) {
     await storageService.deleteFile('resumes', current.rows[0].resume_path);
   }
 
   const uploaded = await storageService.uploadFile('resumes', req.file, `user-${req.user.id}`);
   const { rows } = await query(
-    `UPDATE profiles SET resume_path = $1, resume_url = $2 WHERE id = $3 RETURNING *`,
+    `UPDATE users SET resume_path = $1, resume_url = $2 WHERE id = $3 RETURNING *`,
     [uploaded.path, uploaded.url, req.user.id]
   );
   return ApiResponse.success(res, 200, 'Resume uploaded successfully', sanitizeUser(rows[0]));
@@ -64,7 +64,7 @@ const getPublicProfile = asyncHandler(async (req, res) => {
   const { rows } = await query(
     `SELECT id, full_name, email, phone, location, headline, bio, skills,
             experience_years, education, resume_url, avatar_url, linkedin_url, website, role, created_at
-     FROM profiles WHERE id = $1`,
+     FROM users WHERE id = $1`,
     [req.params.id]
   );
   const user = rows[0];

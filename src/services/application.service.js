@@ -11,7 +11,7 @@ const applyToJob = async (applicantId, jobId, { cover_letter, resume_url, resume
             e.id AS employer_pk, e.email AS employer_email, e.full_name AS employer_name
      FROM jobs j
      JOIN companies c ON c.id = j.company_id
-     JOIN profiles e ON e.id = j.employer_id
+     JOIN users e ON e.id = j.employer_id
      WHERE j.id = $1`,
     [jobId]
   );
@@ -19,7 +19,7 @@ const applyToJob = async (applicantId, jobId, { cover_letter, resume_url, resume
   if (!job) throw new AppError('Job not found.', 404);
   if (job.status !== 'open') throw new AppError('This job is not accepting applications.', 400);
 
-  const applicantRes = await query('SELECT * FROM profiles WHERE id = $1', [applicantId]);
+  const applicantRes = await query('SELECT * FROM users WHERE id = $1', [applicantId]);
   const applicant = applicantRes.rows[0];
   if (!applicant) throw new AppError('Applicant not found.', 404);
 
@@ -182,7 +182,7 @@ const getJobApplicants = async (jobId, employerId, filters = {}, isAdmin = false
             p.headline, p.bio, p.skills, p.experience_years, p.education,
             p.resume_url AS applicant_resume_url, p.avatar_url, p.linkedin_url
      FROM applications a
-     JOIN profiles p ON p.id = a.applicant_id
+     JOIN users p ON p.id = a.applicant_id
      WHERE ${where.join(' AND ')}
      ORDER BY a.applied_at DESC
      LIMIT $${i++} OFFSET $${i++}`,
@@ -250,7 +250,7 @@ const getEmployerApplications = async (employerId, filters = {}) => {
             p.headline, p.skills, p.experience_years, p.resume_url AS applicant_resume_url, p.avatar_url
      FROM applications a
      JOIN jobs j ON j.id = a.job_id
-     JOIN profiles p ON p.id = a.applicant_id
+     JOIN users p ON p.id = a.applicant_id
      WHERE ${where.join(' AND ')}
      ORDER BY a.applied_at DESC
      LIMIT $${i++} OFFSET $${i++}`,
@@ -296,7 +296,7 @@ const getApplicationById = async (applicationId, userId, role) => {
      FROM applications a
      JOIN jobs j ON j.id = a.job_id
      LEFT JOIN companies c ON c.id = j.company_id
-     JOIN profiles p ON p.id = a.applicant_id
+     JOIN users p ON p.id = a.applicant_id
      WHERE a.id = $1`,
     [applicationId]
   );

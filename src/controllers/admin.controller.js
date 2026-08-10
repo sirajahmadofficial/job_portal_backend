@@ -13,10 +13,10 @@ const getStats = asyncHandler(async (req, res) => {
     totalUsers, jobSeekers, employers, blockedUsers, totalCompanies,
     totalJobs, activeJobs, suspiciousJobs, totalApplications, shortlisted, hired, pending,
   ] = await Promise.all([
-    count('SELECT COUNT(*)::int AS c FROM profiles'),
-    count(`SELECT COUNT(*)::int AS c FROM profiles WHERE role = 'job_seeker'`),
-    count(`SELECT COUNT(*)::int AS c FROM profiles WHERE role = 'employer'`),
-    count(`SELECT COUNT(*)::int AS c FROM profiles WHERE is_blocked = true`),
+    count('SELECT COUNT(*)::int AS c FROM users'),
+    count(`SELECT COUNT(*)::int AS c FROM users WHERE role = 'job_seeker'`),
+    count(`SELECT COUNT(*)::int AS c FROM users WHERE role = 'employer'`),
+    count(`SELECT COUNT(*)::int AS c FROM users WHERE is_blocked = true`),
     count('SELECT COUNT(*)::int AS c FROM companies'),
     count('SELECT COUNT(*)::int AS c FROM jobs'),
     count(`SELECT COUNT(*)::int AS c FROM jobs WHERE status = 'open'`),
@@ -54,11 +54,11 @@ const listUsers = asyncHandler(async (req, res) => {
   }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
-  const total = await count(`SELECT COUNT(*)::int AS c FROM profiles ${whereSql}`, params);
+  const total = await count(`SELECT COUNT(*)::int AS c FROM users ${whereSql}`, params);
   const { rows } = await query(
     `SELECT id, email, full_name, role, phone, location, is_email_verified, is_blocked,
             blocked_reason, last_login_at, created_at
-     FROM profiles ${whereSql}
+     FROM users ${whereSql}
      ORDER BY created_at DESC LIMIT $${i++} OFFSET $${i++}`,
     [...params, limit, offset]
   );
@@ -70,7 +70,7 @@ const blockUser = asyncHandler(async (req, res) => {
   if (req.params.id === req.user.id) throw new AppError('You cannot block yourself.', 400);
 
   const { rows } = await query(
-    `UPDATE profiles SET is_blocked = true, blocked_reason = $1
+    `UPDATE users SET is_blocked = true, blocked_reason = $1
      WHERE id = $2
      RETURNING id, email, full_name, role, is_blocked, blocked_reason`,
     [req.body.reason || 'Violated platform policies', req.params.id]
@@ -88,7 +88,7 @@ const blockUser = asyncHandler(async (req, res) => {
 
 const unblockUser = asyncHandler(async (req, res) => {
   const { rows } = await query(
-    `UPDATE profiles SET is_blocked = false, blocked_reason = NULL
+    `UPDATE users SET is_blocked = false, blocked_reason = NULL
      WHERE id = $1
      RETURNING id, email, full_name, role, is_blocked, blocked_reason`,
     [req.params.id]
@@ -117,7 +117,7 @@ const listCompanies = asyncHandler(async (req, res) => {
   const { rows } = await query(
     `SELECT c.*, p.id AS employer_pk, p.full_name AS employer_name, p.email AS employer_email, p.is_blocked
      FROM companies c
-     LEFT JOIN profiles p ON p.id = c.employer_id
+     LEFT JOIN users p ON p.id = c.employer_id
      ${whereSql}
      ORDER BY c.created_at DESC LIMIT $${i++} OFFSET $${i++}`,
     [...params, limit, offset]
@@ -176,7 +176,7 @@ const listJobs = asyncHandler(async (req, res) => {
     `SELECT j.*, c.name AS company_name, p.full_name AS employer_name, p.email AS employer_email
      FROM jobs j
      LEFT JOIN companies c ON c.id = j.company_id
-     LEFT JOIN profiles p ON p.id = j.employer_id
+     LEFT JOIN users p ON p.id = j.employer_id
      ${whereSql}
      ORDER BY j.created_at DESC LIMIT $${i++} OFFSET $${i++}`,
     [...params, limit, offset]
@@ -235,7 +235,7 @@ const listApplications = asyncHandler(async (req, res) => {
     `SELECT a.*, j.title AS job_title, p.full_name AS applicant_name, p.email AS applicant_email
      FROM applications a
      LEFT JOIN jobs j ON j.id = a.job_id
-     LEFT JOIN profiles p ON p.id = a.applicant_id
+     LEFT JOIN users p ON p.id = a.applicant_id
      ${whereSql}
      ORDER BY a.applied_at DESC LIMIT $${i++} OFFSET $${i++}`,
     [...params, limit, offset]
@@ -252,12 +252,12 @@ const listApplications = asyncHandler(async (req, res) => {
 
 const createAdmin = asyncHandler(async (req, res) => {
   const { email, password, full_name } = req.body;
-  const existing = await query('SELECT id FROM profiles WHERE email = $1', [email.toLowerCase()]);
+  const existing = await query('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
   if (existing.rows[0]) throw new AppError('Email already in use.', 409);
 
   const password_hash = await hashPassword(password);
   const { rows } = await query(
-    `INSERT INTO profiles (email, password_hash, full_name, role, is_email_verified)
+    `INSERT INTO users (email, password_hash, full_name, role, is_email_verified)
      VALUES ($1, $2, $3, 'admin', true)
      RETURNING id, email, full_name, role, created_at`,
     [email.toLowerCase(), password_hash, full_name]

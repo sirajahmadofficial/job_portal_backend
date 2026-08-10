@@ -105,7 +105,7 @@ const listJobs = async (filters = {}, userId = null) => {
             p.full_name AS employer_name
      FROM jobs j
      LEFT JOIN companies c ON c.id = j.company_id
-     LEFT JOIN profiles p ON p.id = j.employer_id
+     LEFT JOIN users p ON p.id = j.employer_id
      ${whereSql}
      ORDER BY j.${sortCol} ${sortDir}
      LIMIT $${i++} OFFSET $${i++}`,
@@ -140,7 +140,7 @@ const getJobById = async (jobId, userId = null) => {
             p.full_name AS employer_name, p.email AS employer_email
      FROM jobs j
      LEFT JOIN companies c ON c.id = j.company_id
-     LEFT JOIN profiles p ON p.id = j.employer_id
+     LEFT JOIN users p ON p.id = j.employer_id
      WHERE j.id = $1`,
     [jobId]
   );
