@@ -1,273 +1,268 @@
-const { supabase } = require('../config/database');
+const { query } = require('../config/database');
 const { ApiResponse, AppError } = require('../utils/apiResponse');
 const { asyncHandler } = require('../middlewares/error.middleware');
 const { hashPassword } = require('../utils/generateToken');
 
+const count = async (sql, params = []) => {
+  const { rows } = await query(sql, params);
+  return rows[0].c;
+};
+
 const getStats = asyncHandler(async (req, res) => {
   const [
-    { count: totalUsers },
-    { count: jobSeekers },
-    { count: employers },
-    { count: blockedUsers },
-    { count: totalCompanies },
-    { count: totalJobs },
-    { count: activeJobs },
-    { count: suspiciousJobs },
-    { count: totalApplications },
-    { count: shortlisted },
-    { count: hired },
-    { count: pending },
+    totalUsers, jobSeekers, employers, blockedUsers, totalCompanies,
+    totalJobs, activeJobs, suspiciousJobs, totalApplications, shortlisted, hired, pending,
   ] = await Promise.all([
-    supabase.from('profiles').select('*', { count: 'exact', head: true }),
-    supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('role', 'job_seeker'),
-    supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('role', 'employer'),
-    supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('is_blocked', true),
-    supabase.from('companies').select('*', { count: 'exact', head: true }),
-    supabase.from('jobs').select('*', { count: 'exact', head: true }),
-    supabase.from('jobs').select('*', { count: 'exact', head: true }).eq('status', 'open'),
-    supabase.from('jobs').select('*', { count: 'exact', head: true }).eq('is_suspicious', true),
-    supabase.from('applications').select('*', { count: 'exact', head: true }),
-    supabase.from('applications').select('*', { count: 'exact', head: true }).eq('status', 'shortlisted'),
-    supabase.from('applications').select('*', { count: 'exact', head: true }).eq('status', 'hired'),
-    supabase.from('applications').select('*', { count: 'exact', head: true }).eq('status', 'pending'),
+    count('SELECT COUNT(*)::int AS c FROM profiles'),
+    count(`SELECT COUNT(*)::int AS c FROM profiles WHERE role = 'job_seeker'`),
+    count(`SELECT COUNT(*)::int AS c FROM profiles WHERE role = 'employer'`),
+    count(`SELECT COUNT(*)::int AS c FROM profiles WHERE is_blocked = true`),
+    count('SELECT COUNT(*)::int AS c FROM companies'),
+    count('SELECT COUNT(*)::int AS c FROM jobs'),
+    count(`SELECT COUNT(*)::int AS c FROM jobs WHERE status = 'open'`),
+    count(`SELECT COUNT(*)::int AS c FROM jobs WHERE is_suspicious = true`),
+    count('SELECT COUNT(*)::int AS c FROM applications'),
+    count(`SELECT COUNT(*)::int AS c FROM applications WHERE status = 'shortlisted'`),
+    count(`SELECT COUNT(*)::int AS c FROM applications WHERE status = 'hired'`),
+    count(`SELECT COUNT(*)::int AS c FROM applications WHERE status = 'pending'`),
   ]);
 
   return ApiResponse.success(res, 200, 'Admin stats fetched', {
-    totalUsers: totalUsers || 0,
-    jobSeekers: jobSeekers || 0,
-    employers: employers || 0,
-    blockedUsers: blockedUsers || 0,
-    totalCompanies: totalCompanies || 0,
-    totalJobs: totalJobs || 0,
-    activeJobs: activeJobs || 0,
-    suspiciousJobs: suspiciousJobs || 0,
-    totalApplications: totalApplications || 0,
-    shortlisted: shortlisted || 0,
-    hired: hired || 0,
-    pending: pending || 0,
+    totalUsers, jobSeekers, employers, blockedUsers, totalCompanies,
+    totalJobs, activeJobs, suspiciousJobs, totalApplications, shortlisted, hired, pending,
   });
 });
 
 const listUsers = asyncHandler(async (req, res) => {
   const page = Math.max(1, parseInt(req.query.page, 10) || 1);
   const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 10));
-  const from = (page - 1) * limit;
-  const to = from + limit - 1;
+  const offset = (page - 1) * limit;
 
-  let q = supabase
-    .from('profiles')
-    .select('id, email, full_name, role, phone, location, is_email_verified, is_blocked, blocked_reason, last_login_at, created_at', { count: 'exact' });
-
-  if (req.query.role) q = q.eq('role', req.query.role);
-  if (req.query.is_blocked === 'true') q = q.eq('is_blocked', true);
-  if (req.query.is_blocked === 'false') q = q.eq('is_blocked', false);
-  if (req.query.search) {
-    q = q.or(`full_name.ilike.%${req.query.search}%,email.ilike.%${req.query.search}%`);
+  const where = [];
+  const params = [];
+  let i = 1;
+  if (req.query.role) {
+    where.push(`role = $${i++}`);
+    params.push(req.query.role);
   }
+  if (req.query.is_blocked === 'true') where.push('is_blocked = true');
+  if (req.query.is_blocked === 'false') where.push('is_blocked = false');
+  if (req.query.search) {
+    where.push(`(full_name ILIKE $${i} OR email ILIKE $${i})`);
+    params.push(`%${req.query.search}%`);
+    i++;
+  }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
-  q = q.order('created_at', { ascending: false }).range(from, to);
+  const total = await count(`SELECT COUNT(*)::int AS c FROM profiles ${whereSql}`, params);
+  const { rows } = await query(
+    `SELECT id, email, full_name, role, phone, location, is_email_verified, is_blocked,
+            blocked_reason, last_login_at, created_at
+     FROM profiles ${whereSql}
+     ORDER BY created_at DESC LIMIT $${i++} OFFSET $${i++}`,
+    [...params, limit, offset]
+  );
 
-  const { data, error, count } = await q;
-  if (error) throw new AppError(error.message, 500);
-
-  return ApiResponse.paginated(res, data || [], page, limit, count || 0, 'Users fetched');
+  return ApiResponse.paginated(res, rows, page, limit, total, 'Users fetched');
 });
 
 const blockUser = asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  if (id === req.user.id) throw new AppError('You cannot block yourself.', 400);
+  if (req.params.id === req.user.id) throw new AppError('You cannot block yourself.', 400);
 
-  const { data: user, error } = await supabase
-    .from('profiles')
-    .update({
-      is_blocked: true,
-      blocked_reason: req.body.reason || 'Violated platform policies',
-    })
-    .eq('id', id)
-    .select('id, email, full_name, role, is_blocked, blocked_reason')
-    .single();
+  const { rows } = await query(
+    `UPDATE profiles SET is_blocked = true, blocked_reason = $1
+     WHERE id = $2
+     RETURNING id, email, full_name, role, is_blocked, blocked_reason`,
+    [req.body.reason || 'Violated platform policies', req.params.id]
+  );
+  if (!rows[0]) throw new AppError('User not found.', 404);
 
-  if (error || !user) throw new AppError('User not found.', 404);
+  await query(
+    `UPDATE refresh_tokens SET revoked = true, revoked_at = NOW()
+     WHERE user_id = $1 AND revoked = false`,
+    [req.params.id]
+  );
 
-  // Revoke tokens
-  await supabase
-    .from('refresh_tokens')
-    .update({ revoked: true, revoked_at: new Date().toISOString() })
-    .eq('user_id', id)
-    .eq('revoked', false);
-
-  return ApiResponse.success(res, 200, 'User blocked', user);
+  return ApiResponse.success(res, 200, 'User blocked', rows[0]);
 });
 
 const unblockUser = asyncHandler(async (req, res) => {
-  const { data: user, error } = await supabase
-    .from('profiles')
-    .update({ is_blocked: false, blocked_reason: null })
-    .eq('id', req.params.id)
-    .select('id, email, full_name, role, is_blocked, blocked_reason')
-    .single();
-
-  if (error || !user) throw new AppError('User not found.', 404);
-  return ApiResponse.success(res, 200, 'User unblocked', user);
+  const { rows } = await query(
+    `UPDATE profiles SET is_blocked = false, blocked_reason = NULL
+     WHERE id = $1
+     RETURNING id, email, full_name, role, is_blocked, blocked_reason`,
+    [req.params.id]
+  );
+  if (!rows[0]) throw new AppError('User not found.', 404);
+  return ApiResponse.success(res, 200, 'User unblocked', rows[0]);
 });
 
 const listCompanies = asyncHandler(async (req, res) => {
   const page = Math.max(1, parseInt(req.query.page, 10) || 1);
   const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 10));
-  const from = (page - 1) * limit;
-  const to = from + limit - 1;
+  const offset = (page - 1) * limit;
 
-  let q = supabase
-    .from('companies')
-    .select('*, employer:employer_id (id, full_name, email, is_blocked)', { count: 'exact' });
+  const where = [];
+  const params = [];
+  let i = 1;
+  if (req.query.search) {
+    where.push(`c.name ILIKE $${i++}`);
+    params.push(`%${req.query.search}%`);
+  }
+  if (req.query.is_active === 'true') where.push('c.is_active = true');
+  if (req.query.is_active === 'false') where.push('c.is_active = false');
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
-  if (req.query.search) q = q.ilike('name', `%${req.query.search}%`);
-  if (req.query.is_active === 'true') q = q.eq('is_active', true);
-  if (req.query.is_active === 'false') q = q.eq('is_active', false);
+  const total = await count(`SELECT COUNT(*)::int AS c FROM companies c ${whereSql}`, params);
+  const { rows } = await query(
+    `SELECT c.*, p.id AS employer_pk, p.full_name AS employer_name, p.email AS employer_email, p.is_blocked
+     FROM companies c
+     LEFT JOIN profiles p ON p.id = c.employer_id
+     ${whereSql}
+     ORDER BY c.created_at DESC LIMIT $${i++} OFFSET $${i++}`,
+    [...params, limit, offset]
+  );
 
-  q = q.order('created_at', { ascending: false }).range(from, to);
+  const data = rows.map((r) => ({
+    ...r,
+    employer: {
+      id: r.employer_pk,
+      full_name: r.employer_name,
+      email: r.employer_email,
+      is_blocked: r.is_blocked,
+    },
+  }));
 
-  const { data, error, count } = await q;
-  if (error) throw new AppError(error.message, 500);
-
-  return ApiResponse.paginated(res, data || [], page, limit, count || 0, 'Companies fetched');
+  return ApiResponse.paginated(res, data, page, limit, total, 'Companies fetched');
 });
 
 const toggleCompany = asyncHandler(async (req, res) => {
-  const { data: company } = await supabase
-    .from('companies')
-    .select('*')
-    .eq('id', req.params.id)
-    .single();
+  const existing = await query('SELECT * FROM companies WHERE id = $1', [req.params.id]);
+  if (!existing.rows[0]) throw new AppError('Company not found.', 404);
 
-  if (!company) throw new AppError('Company not found.', 404);
-
-  const { data, error } = await supabase
-    .from('companies')
-    .update({ is_active: !company.is_active })
-    .eq('id', company.id)
-    .select('*')
-    .single();
-
-  if (error) throw new AppError(error.message, 500);
-  return ApiResponse.success(res, 200, `Company ${data.is_active ? 'activated' : 'deactivated'}`, data);
+  const { rows } = await query(
+    `UPDATE companies SET is_active = NOT is_active WHERE id = $1 RETURNING *`,
+    [req.params.id]
+  );
+  return ApiResponse.success(
+    res,
+    200,
+    `Company ${rows[0].is_active ? 'activated' : 'deactivated'}`,
+    rows[0]
+  );
 });
 
 const listJobs = asyncHandler(async (req, res) => {
   const page = Math.max(1, parseInt(req.query.page, 10) || 1);
   const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 10));
-  const from = (page - 1) * limit;
-  const to = from + limit - 1;
+  const offset = (page - 1) * limit;
 
-  let q = supabase
-    .from('jobs')
-    .select(
-      '*, companies:company_id (id, name), employer:employer_id (id, full_name, email)',
-      { count: 'exact' }
-    );
+  const where = [];
+  const params = [];
+  let i = 1;
+  if (req.query.status) {
+    where.push(`j.status = $${i++}`);
+    params.push(req.query.status);
+  }
+  if (req.query.is_suspicious === 'true') where.push('j.is_suspicious = true');
+  if (req.query.search) {
+    where.push(`j.title ILIKE $${i++}`);
+    params.push(`%${req.query.search}%`);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
-  if (req.query.status) q = q.eq('status', req.query.status);
-  if (req.query.is_suspicious === 'true') q = q.eq('is_suspicious', true);
-  if (req.query.search) q = q.ilike('title', `%${req.query.search}%`);
+  const total = await count(`SELECT COUNT(*)::int AS c FROM jobs j ${whereSql}`, params);
+  const { rows } = await query(
+    `SELECT j.*, c.name AS company_name, p.full_name AS employer_name, p.email AS employer_email
+     FROM jobs j
+     LEFT JOIN companies c ON c.id = j.company_id
+     LEFT JOIN profiles p ON p.id = j.employer_id
+     ${whereSql}
+     ORDER BY j.created_at DESC LIMIT $${i++} OFFSET $${i++}`,
+    [...params, limit, offset]
+  );
 
-  q = q.order('created_at', { ascending: false }).range(from, to);
+  const data = rows.map((r) => ({
+    ...r,
+    companies: { id: r.company_id, name: r.company_name },
+    employer: { id: r.employer_id, full_name: r.employer_name, email: r.employer_email },
+  }));
 
-  const { data, error, count } = await q;
-  if (error) throw new AppError(error.message, 500);
-
-  return ApiResponse.paginated(res, data || [], page, limit, count || 0, 'Jobs fetched');
+  return ApiResponse.paginated(res, data, page, limit, total, 'Jobs fetched');
 });
 
 const flagJob = asyncHandler(async (req, res) => {
-  const { data: job, error } = await supabase
-    .from('jobs')
-    .update({
-      is_suspicious: true,
-      suspicious_reason: req.body.reason || 'Flagged by admin',
-      status: 'flagged',
-    })
-    .eq('id', req.params.id)
-    .select('*')
-    .single();
-
-  if (error || !job) throw new AppError('Job not found.', 404);
-  return ApiResponse.success(res, 200, 'Job flagged as suspicious', job);
+  const { rows } = await query(
+    `UPDATE jobs SET is_suspicious = true, suspicious_reason = $1, status = 'flagged'
+     WHERE id = $2 RETURNING *`,
+    [req.body.reason || 'Flagged by admin', req.params.id]
+  );
+  if (!rows[0]) throw new AppError('Job not found.', 404);
+  return ApiResponse.success(res, 200, 'Job flagged as suspicious', rows[0]);
 });
 
 const unflagJob = asyncHandler(async (req, res) => {
-  const { data: job, error } = await supabase
-    .from('jobs')
-    .update({
-      is_suspicious: false,
-      suspicious_reason: null,
-      status: 'open',
-    })
-    .eq('id', req.params.id)
-    .select('*')
-    .single();
-
-  if (error || !job) throw new AppError('Job not found.', 404);
-  return ApiResponse.success(res, 200, 'Job unflagged', job);
+  const { rows } = await query(
+    `UPDATE jobs SET is_suspicious = false, suspicious_reason = NULL, status = 'open'
+     WHERE id = $1 RETURNING *`,
+    [req.params.id]
+  );
+  if (!rows[0]) throw new AppError('Job not found.', 404);
+  return ApiResponse.success(res, 200, 'Job unflagged', rows[0]);
 });
 
 const deleteJob = asyncHandler(async (req, res) => {
-  const { error } = await supabase.from('jobs').delete().eq('id', req.params.id);
-  if (error) throw new AppError(error.message, 500);
+  await query('DELETE FROM jobs WHERE id = $1', [req.params.id]);
   return ApiResponse.success(res, 200, 'Job deleted');
 });
 
 const listApplications = asyncHandler(async (req, res) => {
   const page = Math.max(1, parseInt(req.query.page, 10) || 1);
   const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 10));
-  const from = (page - 1) * limit;
-  const to = from + limit - 1;
+  const offset = (page - 1) * limit;
 
-  let q = supabase
-    .from('applications')
-    .select(
-      `
-      *,
-      jobs:job_id (id, title),
-      applicant:applicant_id (id, full_name, email)
-    `,
-      { count: 'exact' }
-    );
+  const where = [];
+  const params = [];
+  let i = 1;
+  if (req.query.status) {
+    where.push(`a.status = $${i++}`);
+    params.push(req.query.status);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
-  if (req.query.status) q = q.eq('status', req.query.status);
+  const total = await count(`SELECT COUNT(*)::int AS c FROM applications a ${whereSql}`, params);
+  const { rows } = await query(
+    `SELECT a.*, j.title AS job_title, p.full_name AS applicant_name, p.email AS applicant_email
+     FROM applications a
+     LEFT JOIN jobs j ON j.id = a.job_id
+     LEFT JOIN profiles p ON p.id = a.applicant_id
+     ${whereSql}
+     ORDER BY a.applied_at DESC LIMIT $${i++} OFFSET $${i++}`,
+    [...params, limit, offset]
+  );
 
-  q = q.order('applied_at', { ascending: false }).range(from, to);
+  const data = rows.map((r) => ({
+    ...r,
+    jobs: { id: r.job_id, title: r.job_title },
+    applicant: { id: r.applicant_id, full_name: r.applicant_name, email: r.applicant_email },
+  }));
 
-  const { data, error, count } = await q;
-  if (error) throw new AppError(error.message, 500);
-
-  return ApiResponse.paginated(res, data || [], page, limit, count || 0, 'Applications fetched');
+  return ApiResponse.paginated(res, data, page, limit, total, 'Applications fetched');
 });
 
 const createAdmin = asyncHandler(async (req, res) => {
   const { email, password, full_name } = req.body;
-  const { data: existing } = await supabase
-    .from('profiles')
-    .select('id')
-    .eq('email', email.toLowerCase())
-    .maybeSingle();
-
-  if (existing) throw new AppError('Email already in use.', 409);
+  const existing = await query('SELECT id FROM profiles WHERE email = $1', [email.toLowerCase()]);
+  if (existing.rows[0]) throw new AppError('Email already in use.', 409);
 
   const password_hash = await hashPassword(password);
-  const { data: user, error } = await supabase
-    .from('profiles')
-    .insert({
-      email: email.toLowerCase(),
-      password_hash,
-      full_name,
-      role: 'admin',
-      is_email_verified: true,
-    })
-    .select('id, email, full_name, role, created_at')
-    .single();
-
-  if (error) throw new AppError(error.message, 500);
-  return ApiResponse.success(res, 201, 'Admin created', user);
+  const { rows } = await query(
+    `INSERT INTO profiles (email, password_hash, full_name, role, is_email_verified)
+     VALUES ($1, $2, $3, 'admin', true)
+     RETURNING id, email, full_name, role, created_at`,
+    [email.toLowerCase(), password_hash, full_name]
+  );
+  return ApiResponse.success(res, 201, 'Admin created', rows[0]);
 });
 
 module.exports = {

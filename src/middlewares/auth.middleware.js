@@ -1,5 +1,5 @@
 const { verifyAccessToken } = require('../utils/generateToken');
-const { supabase } = require('../config/database');
+const { query } = require('../config/database');
 const { AppError } = require('../utils/apiResponse');
 
 const authenticate = async (req, res, next) => {
@@ -20,15 +20,13 @@ const authenticate = async (req, res, next) => {
       throw new AppError('Invalid access token.', 401);
     }
 
-    const { data: user, error } = await supabase
-      .from('profiles')
-      .select('id, email, full_name, role, is_email_verified, is_blocked, blocked_reason')
-      .eq('id', decoded.id)
-      .single();
-
-    if (error || !user) {
-      throw new AppError('User not found or token invalid.', 401);
-    }
+    const { rows } = await query(
+      `SELECT id, email, full_name, role, is_email_verified, is_blocked, blocked_reason
+       FROM profiles WHERE id = $1`,
+      [decoded.id]
+    );
+    const user = rows[0];
+    if (!user) throw new AppError('User not found or token invalid.', 401);
 
     if (user.is_blocked) {
       throw new AppError(
@@ -47,24 +45,19 @@ const authenticate = async (req, res, next) => {
 const optionalAuth = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return next();
-    }
+    if (!authHeader || !authHeader.startsWith('Bearer ')) return next();
 
     const token = authHeader.split(' ')[1];
     try {
       const decoded = verifyAccessToken(token);
-      const { data: user } = await supabase
-        .from('profiles')
-        .select('id, email, full_name, role, is_email_verified, is_blocked')
-        .eq('id', decoded.id)
-        .single();
-
-      if (user && !user.is_blocked) {
-        req.user = user;
-      }
+      const { rows } = await query(
+        `SELECT id, email, full_name, role, is_email_verified, is_blocked
+         FROM profiles WHERE id = $1`,
+        [decoded.id]
+      );
+      if (rows[0] && !rows[0].is_blocked) req.user = rows[0];
     } catch {
-      // ignore invalid token for optional auth
+      // ignore
     }
     next();
   } catch (error) {

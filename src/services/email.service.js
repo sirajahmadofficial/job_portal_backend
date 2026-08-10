@@ -68,8 +68,15 @@ const sendEmail = async ({ to, subject, html }) => {
     return { success: true, mocked: true };
   }
 
-  await sgMail.send(msg);
-  return { success: true };
+  try {
+    await sgMail.send(msg);
+    return { success: true };
+  } catch (err) {
+    const details = err.response?.body || err.message;
+    console.error('[Email:SendGrid Error]', details);
+    // Do not crash the API if email provider rejects the request
+    return { success: false, error: details };
+  }
 };
 
 const sendVerificationEmail = async (user, token) => {

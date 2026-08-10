@@ -1,43 +1,48 @@
-const { supabase } = require('../config/database');
-const { AppError } = require('../utils/apiResponse');
+const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+const { AppError } = require('../utils/apiResponse');
+
+const UPLOAD_ROOT = path.join(__dirname, '../../uploads');
+
+const ensureDir = (dir) => {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+};
 
 const uploadFile = async (bucket, file, folder = '') => {
   if (!file) throw new AppError('No file provided.', 400);
 
+  const folderPath = path.join(UPLOAD_ROOT, bucket, folder);
+  ensureDir(folderPath);
+
   const ext = path.extname(file.originalname).toLowerCase() || '';
-  const fileName = `${folder ? `${folder}/` : ''}${uuidv4()}${ext}`;
+  const fileName = `${uuidv4()}${ext}`;
+  const relativePath = path.join(bucket, folder, fileName).replace(/\\/g, '/');
+  const absolutePath = path.join(UPLOAD_ROOT, relativePath);
 
-  const { error } = await supabase.storage.from(bucket).upload(fileName, file.buffer, {
-    contentType: file.mimetype,
-    upsert: false,
-  });
+  fs.writeFileSync(absolutePath, file.buffer);
 
-  if (error) {
-    throw new AppError(`File upload failed: ${error.message}`, 500);
-  }
-
-  const { data: publicData } = supabase.storage.from(bucket).getPublicUrl(fileName);
-
+  const baseUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 5000}`;
   return {
-    path: fileName,
-    url: publicData?.publicUrl || null,
+    path: relativePath,
+    url: `${baseUrl}/uploads/${relativePath}`,
   };
 };
 
-const deleteFile = async (bucket, filePath) => {
+const deleteFile = async (_bucket, filePath) => {
   if (!filePath) return;
-  await supabase.storage.from(bucket).remove([filePath]);
+  const absolutePath = path.join(UPLOAD_ROOT, filePath);
+  if (fs.existsSync(absolutePath)) {
+    fs.unlinkSync(absolutePath);
+  }
 };
 
-const getSignedUrl = async (bucket, filePath, expiresIn = 900) => {
-  const { data, error } = await supabase.storage
-    .from(bucket)
-    .createSignedUrl(filePath, expiresIn);
-
-  if (error) throw new AppError(`Failed to create signed URL: ${error.message}`, 500);
-  return data.signedUrl;
+const getSignedUrl = async (_bucket, filePath) => {
+  if (!filePath) throw new AppError('File path missing.', 404);
+  const baseUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 5000}`;
+  return `${baseUrl}/uploads/${filePath}`;
 };
 
-module.exports = { uploadFile, deleteFile, getSignedUrl };
+module.exports = { uploadFile, deleteFile, getSignedUrl, UPLOAD_ROOT };

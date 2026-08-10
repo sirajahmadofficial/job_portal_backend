@@ -1,39 +1,26 @@
-const { createClient } = require('@supabase/supabase-js');
+const { Pool } = require('pg');
 require('dotenv').config();
 
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
+const databaseUrl = process.env.DATABASE_URL;
 
-const hasConfig = Boolean(supabaseUrl && supabaseServiceKey);
-
-if (!hasConfig) {
-  console.warn('Warning: SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing.');
-  console.warn('Copy backend/.env.example to backend/.env and fill in your Supabase credentials.');
+if (!databaseUrl) {
+  console.warn('Warning: DATABASE_URL is missing. Copy .env.example to .env.');
 }
 
-// Service role client — used by backend only (bypasses RLS)
-// Placeholder values allow the process to boot before .env is configured.
-const supabase = createClient(
-  supabaseUrl || 'https://placeholder.supabase.co',
-  supabaseServiceKey || 'placeholder-service-role-key',
-  {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
-  }
-);
+const pool = new Pool({
+  connectionString: databaseUrl,
+  ssl: databaseUrl?.includes('localhost') ? false : { rejectUnauthorized: false },
+  max: 10,
+});
 
-const supabaseAnon = createClient(
-  supabaseUrl || 'https://placeholder.supabase.co',
-  supabaseAnonKey || 'placeholder-anon-key',
-  {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
-  }
-);
+pool.on('error', (err) => {
+  console.error('Unexpected PostgreSQL pool error:', err.message);
+});
 
-module.exports = { supabase, supabaseAnon, hasConfig };
+const query = async (text, params = []) => {
+  return pool.query(text, params);
+};
+
+const getClient = async () => pool.connect();
+
+module.exports = { pool, query, getClient };

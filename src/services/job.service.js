@@ -1,7 +1,33 @@
-const { supabase } = require('../config/database');
+const { query } = require('../config/database');
 const { AppError } = require('../utils/apiResponse');
 
-const listJobs = async (query = {}, userId = null) => {
+const mapJob = (row) => {
+  if (!row) return null;
+  return {
+    ...row,
+    companies: row.company_id
+      ? {
+          id: row.company_id,
+          name: row.company_name,
+          logo_url: row.company_logo_url,
+          location: row.company_location,
+          industry: row.company_industry,
+          description: row.company_description,
+          website: row.company_website,
+          company_size: row.company_size,
+        }
+      : null,
+    employer: row.employer_id
+      ? {
+          id: row.employer_id,
+          full_name: row.employer_name,
+          email: row.employer_email,
+        }
+      : null,
+  };
+};
+
+const listJobs = async (filters = {}, userId = null) => {
   const {
     page = 1,
     limit = 10,
@@ -15,150 +41,169 @@ const listJobs = async (query = {}, userId = null) => {
     employer_id = '',
     min_salary = '',
     experience_level = '',
-  } = query;
+  } = filters;
 
   const pageNum = Math.max(1, parseInt(page, 10) || 1);
   const limitNum = Math.min(50, Math.max(1, parseInt(limit, 10) || 10));
-  const from = (pageNum - 1) * limitNum;
-  const to = from + limitNum - 1;
+  const offset = (pageNum - 1) * limitNum;
 
-  let q = supabase
-    .from('jobs')
-    .select(
-      `
-      *,
-      companies:company_id (id, name, logo_url, location, industry),
-      employer:employer_id (id, full_name)
-    `,
-      { count: 'exact' }
-    );
+  const where = [];
+  const params = [];
+  let i = 1;
 
-  if (status) q = q.eq('status', status);
-  if (category) q = q.ilike('category', `%${category}%`);
-  if (location) q = q.ilike('location', `%${location}%`);
-  if (job_type) q = q.eq('job_type', job_type);
-  if (employer_id) q = q.eq('employer_id', employer_id);
-  if (experience_level) q = q.eq('experience_level', experience_level);
-  if (min_salary) q = q.gte('salary_min', Number(min_salary));
+  if (status) {
+    where.push(`j.status = $${i++}`);
+    params.push(status);
+  }
+  if (category) {
+    where.push(`j.category ILIKE $${i++}`);
+    params.push(`%${category}%`);
+  }
+  if (location) {
+    where.push(`j.location ILIKE $${i++}`);
+    params.push(`%${location}%`);
+  }
+  if (job_type) {
+    where.push(`j.job_type = $${i++}`);
+    params.push(job_type);
+  }
+  if (employer_id) {
+    where.push(`j.employer_id = $${i++}`);
+    params.push(employer_id);
+  } else {
+    where.push('j.is_suspicious = false');
+  }
+  if (experience_level) {
+    where.push(`j.experience_level = $${i++}`);
+    params.push(experience_level);
+  }
+  if (min_salary) {
+    where.push(`j.salary_min >= $${i++}`);
+    params.push(Number(min_salary));
+  }
   if (search) {
-    q = q.or(`title.ilike.%${search}%,description.ilike.%${search}%,category.ilike.%${search}%`);
+    where.push(`(j.title ILIKE $${i} OR j.description ILIKE $${i} OR j.category ILIKE $${i})`);
+    params.push(`%${search}%`);
+    i++;
   }
 
-  // Hide suspicious from public listings unless employer viewing own
-  if (!employer_id) {
-    q = q.eq('is_suspicious', false);
-  }
-
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const allowedSort = ['created_at', 'title', 'salary_min', 'applications_count', 'views_count'];
   const sortCol = allowedSort.includes(sort) ? sort : 'created_at';
-  const ascending = order === 'asc';
+  const sortDir = order === 'asc' ? 'ASC' : 'DESC';
 
-  q = q.order(sortCol, { ascending }).range(from, to);
+  const countRes = await query(
+    `SELECT COUNT(*)::int AS total FROM jobs j ${whereSql}`,
+    params
+  );
+  const total = countRes.rows[0].total;
 
-  const { data, error, count } = await q;
-  if (error) throw new AppError(error.message, 500);
+  const dataRes = await query(
+    `SELECT j.*,
+            c.name AS company_name, c.logo_url AS company_logo_url,
+            c.location AS company_location, c.industry AS company_industry,
+            p.full_name AS employer_name
+     FROM jobs j
+     LEFT JOIN companies c ON c.id = j.company_id
+     LEFT JOIN profiles p ON p.id = j.employer_id
+     ${whereSql}
+     ORDER BY j.${sortCol} ${sortDir}
+     LIMIT $${i++} OFFSET $${i++}`,
+    [...params, limitNum, offset]
+  );
 
   let savedSet = new Set();
-  if (userId && data?.length) {
-    const jobIds = data.map((j) => j.id);
-    const { data: saved } = await supabase
-      .from('saved_jobs')
-      .select('job_id')
-      .eq('user_id', userId)
-      .in('job_id', jobIds);
-    savedSet = new Set((saved || []).map((s) => s.job_id));
+  if (userId && dataRes.rows.length) {
+    const ids = dataRes.rows.map((r) => r.id);
+    const savedRes = await query(
+      `SELECT job_id FROM saved_jobs WHERE user_id = $1 AND job_id = ANY($2::uuid[])`,
+      [userId, ids]
+    );
+    savedSet = new Set(savedRes.rows.map((s) => s.job_id));
   }
 
-  const jobs = (data || []).map((job) => ({
-    ...job,
-    is_saved: savedSet.has(job.id),
+  const jobs = dataRes.rows.map((row) => ({
+    ...mapJob(row),
+    is_saved: savedSet.has(row.id),
   }));
 
-  return { jobs, page: pageNum, limit: limitNum, total: count || 0 };
+  return { jobs, page: pageNum, limit: limitNum, total };
 };
 
 const getJobById = async (jobId, userId = null) => {
-  const { data: job, error } = await supabase
-    .from('jobs')
-    .select(
-      `
-      *,
-      companies:company_id (*),
-      employer:employer_id (id, full_name, email)
-    `
-    )
-    .eq('id', jobId)
-    .single();
+  const { rows } = await query(
+    `SELECT j.*,
+            c.name AS company_name, c.logo_url AS company_logo_url,
+            c.location AS company_location, c.industry AS company_industry,
+            c.description AS company_description, c.website AS company_website,
+            c.company_size,
+            p.full_name AS employer_name, p.email AS employer_email
+     FROM jobs j
+     LEFT JOIN companies c ON c.id = j.company_id
+     LEFT JOIN profiles p ON p.id = j.employer_id
+     WHERE j.id = $1`,
+    [jobId]
+  );
+  if (!rows[0]) throw new AppError('Job not found.', 404);
 
-  if (error || !job) throw new AppError('Job not found.', 404);
-
-  // Increment views (fire and forget)
-  supabase
-    .from('jobs')
-    .update({ views_count: (job.views_count || 0) + 1 })
-    .eq('id', jobId)
-    .then(() => {});
+  await query('UPDATE jobs SET views_count = views_count + 1 WHERE id = $1', [jobId]);
 
   let is_saved = false;
   let has_applied = false;
-
   if (userId) {
-    const [{ data: saved }, { data: app }] = await Promise.all([
-      supabase.from('saved_jobs').select('id').eq('user_id', userId).eq('job_id', jobId).maybeSingle(),
-      supabase.from('applications').select('id, status').eq('applicant_id', userId).eq('job_id', jobId).maybeSingle(),
-    ]);
-    is_saved = !!saved;
-    has_applied = !!app;
+    const saved = await query(
+      'SELECT id FROM saved_jobs WHERE user_id = $1 AND job_id = $2',
+      [userId, jobId]
+    );
+    const app = await query(
+      'SELECT id FROM applications WHERE applicant_id = $1 AND job_id = $2 AND withdrawn_at IS NULL',
+      [userId, jobId]
+    );
+    is_saved = !!saved.rows[0];
+    has_applied = !!app.rows[0];
   }
 
-  return { ...job, is_saved, has_applied };
+  return { ...mapJob(rows[0]), is_saved, has_applied };
 };
 
 const createJob = async (employerId, payload) => {
-  const { data: company } = await supabase
-    .from('companies')
-    .select('*')
-    .eq('employer_id', employerId)
-    .maybeSingle();
+  const companyRes = await query('SELECT * FROM companies WHERE employer_id = $1', [employerId]);
+  const company = companyRes.rows[0];
+  if (!company) throw new AppError('Please create a company profile before posting jobs.', 400);
+  if (!company.is_active) throw new AppError('Your company is inactive. Contact support.', 403);
 
-  if (!company) {
-    throw new AppError('Please create a company profile before posting jobs.', 400);
-  }
-
-  if (!company.is_active) {
-    throw new AppError('Your company is inactive. Contact support.', 403);
-  }
-
-  const { data: job, error } = await supabase
-    .from('jobs')
-    .insert({
-      company_id: company.id,
-      employer_id: employerId,
-      title: payload.title,
-      description: payload.description,
-      requirements: payload.requirements || null,
-      responsibilities: payload.responsibilities || null,
-      category: payload.category,
-      location: payload.location,
-      job_type: payload.job_type || 'full_time',
-      salary_min: payload.salary_min || null,
-      salary_max: payload.salary_max || null,
-      salary_currency: payload.salary_currency || 'USD',
-      experience_level: payload.experience_level || null,
-      status: payload.status || 'open',
-      closes_at: payload.closes_at || null,
-    })
-    .select('*')
-    .single();
-
-  if (error) throw new AppError(error.message, 500);
-  return job;
+  const { rows } = await query(
+    `INSERT INTO jobs (
+      company_id, employer_id, title, description, requirements, responsibilities,
+      category, location, job_type, salary_min, salary_max, salary_currency,
+      experience_level, status, closes_at
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+    RETURNING *`,
+    [
+      company.id,
+      employerId,
+      payload.title,
+      payload.description,
+      payload.requirements || null,
+      payload.responsibilities || null,
+      payload.category,
+      payload.location,
+      payload.job_type || 'full_time',
+      payload.salary_min || null,
+      payload.salary_max || null,
+      payload.salary_currency || 'USD',
+      payload.experience_level || null,
+      payload.status || 'open',
+      payload.closes_at || null,
+    ]
+  );
+  return rows[0];
 };
 
 const updateJob = async (jobId, employerId, payload, isAdmin = false) => {
-  const { data: existing } = await supabase.from('jobs').select('*').eq('id', jobId).single();
+  const existingRes = await query('SELECT * FROM jobs WHERE id = $1', [jobId]);
+  const existing = existingRes.rows[0];
   if (!existing) throw new AppError('Job not found.', 404);
-
   if (!isAdmin && existing.employer_id !== employerId) {
     throw new AppError('You can only update your own jobs.', 403);
   }
@@ -169,32 +214,33 @@ const updateJob = async (jobId, employerId, payload, isAdmin = false) => {
     'experience_level', 'status', 'closes_at',
   ];
 
-  const updates = {};
+  const sets = [];
+  const params = [];
+  let i = 1;
   allowed.forEach((key) => {
-    if (payload[key] !== undefined) updates[key] = payload[key];
+    if (payload[key] !== undefined) {
+      sets.push(`${key} = $${i++}`);
+      params.push(payload[key]);
+    }
   });
+  if (!sets.length) return existing;
 
-  const { data: job, error } = await supabase
-    .from('jobs')
-    .update(updates)
-    .eq('id', jobId)
-    .select('*')
-    .single();
-
-  if (error) throw new AppError(error.message, 500);
-  return job;
+  params.push(jobId);
+  const { rows } = await query(
+    `UPDATE jobs SET ${sets.join(', ')} WHERE id = $${i} RETURNING *`,
+    params
+  );
+  return rows[0];
 };
 
 const deleteJob = async (jobId, employerId, isAdmin = false) => {
-  const { data: existing } = await supabase.from('jobs').select('*').eq('id', jobId).single();
+  const existingRes = await query('SELECT * FROM jobs WHERE id = $1', [jobId]);
+  const existing = existingRes.rows[0];
   if (!existing) throw new AppError('Job not found.', 404);
-
   if (!isAdmin && existing.employer_id !== employerId) {
     throw new AppError('You can only delete your own jobs.', 403);
   }
-
-  const { error } = await supabase.from('jobs').delete().eq('id', jobId);
-  if (error) throw new AppError(error.message, 500);
+  await query('DELETE FROM jobs WHERE id = $1', [jobId]);
   return { message: 'Job deleted successfully.' };
 };
 
@@ -205,91 +251,73 @@ const setJobStatus = async (jobId, employerId, status) => {
   return updateJob(jobId, employerId, { status });
 };
 
-const getEmployerJobs = async (employerId, query = {}) => {
-  return listJobs({ ...query, employer_id: employerId, status: query.status || '' }, employerId);
+const getEmployerJobs = async (employerId, filters = {}) => {
+  return listJobs({ ...filters, employer_id: employerId, status: filters.status || '' }, employerId);
 };
 
 const getCategories = async () => {
-  const { data, error } = await supabase
-    .from('jobs')
-    .select('category')
-    .eq('status', 'open');
-
-  if (error) throw new AppError(error.message, 500);
-
-  const counts = {};
-  (data || []).forEach((row) => {
-    counts[row.category] = (counts[row.category] || 0) + 1;
-  });
-
-  return Object.entries(counts)
-    .map(([name, count]) => ({ name, count }))
-    .sort((a, b) => b.count - a.count);
+  const { rows } = await query(
+    `SELECT category AS name, COUNT(*)::int AS count
+     FROM jobs WHERE status = 'open'
+     GROUP BY category ORDER BY count DESC`
+  );
+  return rows;
 };
 
 const saveJob = async (userId, jobId) => {
-  const { data: job } = await supabase.from('jobs').select('id').eq('id', jobId).single();
-  if (!job) throw new AppError('Job not found.', 404);
+  const job = await query('SELECT id FROM jobs WHERE id = $1', [jobId]);
+  if (!job.rows[0]) throw new AppError('Job not found.', 404);
 
-  const { data: existing } = await supabase
-    .from('saved_jobs')
-    .select('id')
-    .eq('user_id', userId)
-    .eq('job_id', jobId)
-    .maybeSingle();
+  const existing = await query(
+    'SELECT id FROM saved_jobs WHERE user_id = $1 AND job_id = $2',
+    [userId, jobId]
+  );
+  if (existing.rows[0]) throw new AppError('Job already saved.', 409);
 
-  if (existing) throw new AppError('Job already saved.', 409);
-
-  const { data, error } = await supabase
-    .from('saved_jobs')
-    .insert({ user_id: userId, job_id: jobId })
-    .select('*')
-    .single();
-
-  if (error) throw new AppError(error.message, 500);
-  return data;
+  const { rows } = await query(
+    'INSERT INTO saved_jobs (user_id, job_id) VALUES ($1, $2) RETURNING *',
+    [userId, jobId]
+  );
+  return rows[0];
 };
 
 const unsaveJob = async (userId, jobId) => {
-  const { error } = await supabase
-    .from('saved_jobs')
-    .delete()
-    .eq('user_id', userId)
-    .eq('job_id', jobId);
-
-  if (error) throw new AppError(error.message, 500);
+  await query('DELETE FROM saved_jobs WHERE user_id = $1 AND job_id = $2', [userId, jobId]);
   return { message: 'Job removed from saved list.' };
 };
 
-const getSavedJobs = async (userId, query = {}) => {
-  const pageNum = Math.max(1, parseInt(query.page, 10) || 1);
-  const limitNum = Math.min(50, Math.max(1, parseInt(query.limit, 10) || 10));
-  const from = (pageNum - 1) * limitNum;
-  const to = from + limitNum - 1;
+const getSavedJobs = async (userId, filters = {}) => {
+  const pageNum = Math.max(1, parseInt(filters.page, 10) || 1);
+  const limitNum = Math.min(50, Math.max(1, parseInt(filters.limit, 10) || 10));
+  const offset = (pageNum - 1) * limitNum;
 
-  const { data, error, count } = await supabase
-    .from('saved_jobs')
-    .select(
-      `
-      id, created_at,
-      jobs:job_id (
-        *,
-        companies:company_id (id, name, logo_url, location)
-      )
-    `,
-      { count: 'exact' }
-    )
-    .eq('user_id', userId)
-    .order('created_at', { ascending: false })
-    .range(from, to);
+  const countRes = await query(
+    'SELECT COUNT(*)::int AS total FROM saved_jobs WHERE user_id = $1',
+    [userId]
+  );
 
-  if (error) throw new AppError(error.message, 500);
+  const { rows } = await query(
+    `SELECT s.id AS saved_id, s.created_at AS saved_at, j.*,
+            c.name AS company_name, c.logo_url AS company_logo_url, c.location AS company_location
+     FROM saved_jobs s
+     JOIN jobs j ON j.id = s.job_id
+     LEFT JOIN companies c ON c.id = j.company_id
+     WHERE s.user_id = $1
+     ORDER BY s.created_at DESC
+     LIMIT $2 OFFSET $3`,
+    [userId, limitNum, offset]
+  );
 
   return {
-    jobs: (data || []).map((s) => ({ ...s.jobs, saved_id: s.id, saved_at: s.created_at, is_saved: true })),
+    jobs: rows.map((row) => ({
+      ...mapJob(row),
+      saved_id: row.saved_id,
+      saved_at: row.saved_at,
+      is_saved: true,
+    })),
     page: pageNum,
     limit: limitNum,
-    total: count || 0,
+    total: countRes.rows[0].total,
   };
 };
 
