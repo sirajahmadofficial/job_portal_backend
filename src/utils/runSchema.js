@@ -4,7 +4,7 @@ const path = require('path');
 const { pool } = require('../config/database');
 
 async function runSchema() {
-  const schemaPath = path.join(__dirname, '../../supabase/schema.sql');
+  const schemaPath = path.join(__dirname, '../../database/schema.sql');
   const sql = fs.readFileSync(schemaPath, 'utf8');
   console.log('Running schema against DATABASE_URL...');
   await pool.query(sql);

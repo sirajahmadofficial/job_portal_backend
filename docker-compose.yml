@@ -1,0 +1,16 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: jobportal-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: job_portal
+    ports:
+      - "5432:5432"
+    volumes:
+      - jobportal_pgdata:/var/lib/postgresql/data
+
+volumes:
+  jobportal_pgdata:

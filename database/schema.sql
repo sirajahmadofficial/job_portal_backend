@@ -1,4 +1,4 @@
--- Job Portal PostgreSQL Schema (direct DATABASE_URL)
+-- Job Portal PostgreSQL Schema
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
