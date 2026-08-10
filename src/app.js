@@ -25,17 +25,19 @@ app.use(
   })
 );
 const allowedOrigins = (
-  process.env.FRONTEND_URL || 'http://localhost:5173'
+  process.env.FRONTEND_URL ||
+  'http://localhost:5173,https://job-portal-frontend-kappa-orcin.vercel.app'
 )
   .split(',')
-  .map((o) => o.trim())
+  .map((o) => o.trim().replace(/\/$/, ''))
   .filter(Boolean);
 
 app.use(
   cors({
     origin(origin, callback) {
-      // Allow non-browser tools (no Origin) and configured frontends
-      if (!origin || allowedOrigins.includes(origin)) {
+      if (!origin) return callback(null, true);
+      const normalized = origin.replace(/\/$/, '');
+      if (allowedOrigins.includes(normalized)) {
         return callback(null, true);
       }
       return callback(null, false);
