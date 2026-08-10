@@ -2,7 +2,12 @@ const sgMail = require('../config/sendgrid');
 
 const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || 'noreply@jobportal.com';
 const FROM_NAME = process.env.SENDGRID_FROM_NAME || 'JobPortal';
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+// FRONTEND_URL may be a comma-separated list (CORS). Prefer public URL for email links.
+const FRONTEND_URL = (process.env.FRONTEND_URL || 'http://localhost:5173')
+  .split(',')
+  .map((u) => u.trim().replace(/\/$/, ''))
+  .find((u) => u.startsWith('https://'))
+  || (process.env.FRONTEND_URL || 'http://localhost:5173').split(',')[0].trim().replace(/\/$/, '');
 
 const baseLayout = (title, bodyContent) => `
 <!DOCTYPE html>

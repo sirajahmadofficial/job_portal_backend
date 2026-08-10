@@ -136,21 +136,29 @@ const register = async ({ email, password, full_name, role = 'job_seeker', phone
   try {
     const verifyToken = await storeEmailToken(user.id, 'email_verification', 24);
     const emailResult = await emailService.sendVerificationEmail(user, verifyToken);
-    if (emailResult?.success === false && process.env.NODE_ENV !== 'production') {
+
+    // SendGrid sender not verified => mail never arrives. Don't block the user.
+    if (!emailResult?.success) {
       await query('UPDATE users SET is_email_verified = true WHERE id = $1', [user.id]);
       user.is_email_verified = true;
-      console.warn(
-        `[DEV] Email send failed — auto-verified ${user.email}. Fix SendGrid sender verification for real emails.`
-      );
-    } else if (process.env.NODE_ENV !== 'production') {
-      console.log(`[DEV] Verification link: ${process.env.FRONTEND_URL}/verify-email?token=${verifyToken}`);
+      console.warn(`[Email] Send failed — auto-verified ${user.email}. Fix SendGrid Sender Identity.`);
+      return {
+        user: sanitizeUser(user),
+        isFirstUser: false,
+        message:
+          'Account created. Email service is unavailable, so your account was verified automatically. You can log in now.',
+      };
     }
   } catch (err) {
     console.error('Verification email failed:', err.message);
-    if (process.env.NODE_ENV !== 'production') {
-      await query('UPDATE users SET is_email_verified = true WHERE id = $1', [user.id]);
-      user.is_email_verified = true;
-    }
+    await query('UPDATE users SET is_email_verified = true WHERE id = $1', [user.id]);
+    user.is_email_verified = true;
+    return {
+      user: sanitizeUser(user),
+      isFirstUser: false,
+      message:
+        'Account created. Email service is unavailable, so your account was verified automatically. You can log in now.',
+    };
   }
 
   return {
@@ -187,7 +195,17 @@ const resendVerification = async (email) => {
   if (user.is_email_verified) throw new AppError('Email is already verified.', 400);
 
   const token = await storeEmailToken(user.id, 'email_verification', 24);
-  await emailService.sendResendVerificationEmail(user, token);
+  const emailResult = await emailService.sendResendVerificationEmail(user, token);
+
+  if (!emailResult?.success) {
+    await query('UPDATE users SET is_email_verified = true WHERE id = $1', [user.id]);
+    console.warn(`[Email] Resend failed — auto-verified ${user.email}. Fix SendGrid Sender Identity.`);
+    return {
+      message:
+        'Email service is unavailable, so your account was verified automatically. You can log in now.',
+    };
+  }
+
   return { message: 'If an account exists with this email, a verification link has been sent.' };
 };
 
