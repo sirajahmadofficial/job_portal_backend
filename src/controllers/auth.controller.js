@@ -2,9 +2,17 @@ const authService = require('../services/auth.service');
 const { ApiResponse } = require('../utils/apiResponse');
 const { asyncHandler } = require('../middlewares/error.middleware');
 
+const getSetupStatus = asyncHandler(async (req, res) => {
+  const result = await authService.getSetupStatus();
+  return ApiResponse.success(res, 200, result.message, result);
+});
+
 const register = asyncHandler(async (req, res) => {
   const result = await authService.register(req.body);
-  return ApiResponse.success(res, 201, result.message, { user: result.user });
+  return ApiResponse.success(res, 201, result.message, {
+    user: result.user,
+    isFirstUser: result.isFirstUser,
+  });
 });
 
 const verifyEmail = asyncHandler(async (req, res) => {
@@ -53,6 +61,7 @@ const getMe = asyncHandler(async (req, res) => {
 });
 
 module.exports = {
+  getSetupStatus,
   register,
   verifyEmail,
   resendVerification,

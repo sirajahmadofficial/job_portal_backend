@@ -6,6 +6,8 @@ const { validate } = require('../middlewares/validate.middleware');
 
 const router = express.Router();
 
+router.get('/setup-status', authController.getSetupStatus);
+
 router.post(
   '/register',
   [

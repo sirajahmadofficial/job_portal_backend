@@ -68,10 +68,37 @@ const findValidEmailToken = async (rawToken, type) => {
   return null;
 };
 
+const getSetupStatus = async () => {
+  const [usersRes, adminRes] = await Promise.all([
+    query('SELECT COUNT(*)::int AS total FROM profiles'),
+    query(`SELECT COUNT(*)::int AS total FROM profiles WHERE role = 'admin'`),
+  ]);
+  const totalUsers = usersRes.rows[0].total;
+  const adminCount = adminRes.rows[0].total;
+  const needsAdmin = adminCount === 0;
+
+  return {
+    isFirstUser: needsAdmin,
+    needsAdmin,
+    totalUsers,
+    adminCount,
+    message: needsAdmin
+      ? 'No admin yet. The next account will become Admin.'
+      : 'Register as Job Seeker or Employer.',
+  };
+};
+
 const register = async ({ email, password, full_name, role = 'job_seeker', phone }) => {
-  const allowedRoles = ['job_seeker', 'employer'];
-  if (!allowedRoles.includes(role)) {
-    throw new AppError('Invalid role. Register as job_seeker or employer.', 400);
+  const setup = await getSetupStatus();
+  const isFirstUser = setup.needsAdmin;
+
+  // If no admin exists yet, this account becomes Admin
+  let finalRole = isFirstUser ? 'admin' : role;
+  if (!isFirstUser) {
+    const allowedRoles = ['job_seeker', 'employer'];
+    if (!allowedRoles.includes(finalRole)) {
+      throw new AppError('Invalid role. Register as job_seeker or employer.', 400);
+    }
   }
 
   const existing = await query('SELECT id FROM profiles WHERE email = $1', [email.toLowerCase()]);
@@ -80,24 +107,36 @@ const register = async ({ email, password, full_name, role = 'job_seeker', phone
   }
 
   const password_hash = await hashPassword(password);
+  // First admin is verified immediately so they can log in and manage the platform
+  const isVerified = isFirstUser;
+
   let user;
   try {
     const result = await query(
       `INSERT INTO profiles (email, password_hash, full_name, role, phone, is_email_verified)
-       VALUES ($1, $2, $3, $4, $5, false)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
-      [email.toLowerCase(), password_hash, full_name, role, phone || null]
+      [email.toLowerCase(), password_hash, full_name, finalRole, phone || null, isVerified]
     );
     user = result.rows[0];
   } catch (err) {
     throw new AppError(err.message || 'Registration failed', 500);
   }
 
+  if (isFirstUser) {
+    console.log(`[Bootstrap] First user created as ADMIN: ${user.email}`);
+    return {
+      user: sanitizeUser(user),
+      isFirstUser: true,
+      message:
+        'Welcome! You are the first user and have been made Admin. You can log in now.',
+    };
+  }
+
   try {
     const verifyToken = await storeEmailToken(user.id, 'email_verification', 24);
     const emailResult = await emailService.sendVerificationEmail(user, verifyToken);
     if (emailResult?.success === false && process.env.NODE_ENV !== 'production') {
-      // Local/dev fallback when SendGrid sender is not verified yet
       await query('UPDATE profiles SET is_email_verified = true WHERE id = $1', [user.id]);
       user.is_email_verified = true;
       console.warn(
@@ -116,6 +155,7 @@ const register = async ({ email, password, full_name, role = 'job_seeker', phone
 
   return {
     user: sanitizeUser(user),
+    isFirstUser: false,
     message: 'Registration successful. Please check your email to verify your account.',
   };
 };
@@ -283,6 +323,7 @@ const getMe = async (userId) => {
 };
 
 module.exports = {
+  getSetupStatus,
   register,
   verifyEmail,
   resendVerification,
