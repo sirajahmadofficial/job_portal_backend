@@ -24,9 +24,22 @@ app.use(
     crossOriginResourcePolicy: { policy: 'cross-origin' },
   })
 );
+const allowedOrigins = (
+  process.env.FRONTEND_URL || 'http://localhost:5173'
+)
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+    origin(origin, callback) {
+      // Allow non-browser tools (no Origin) and configured frontends
+      if (!origin || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(null, false);
+    },
     credentials: true,
   })
 );
@@ -38,8 +51,29 @@ app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 50,
+  max: 100,
   message: { success: false, message: 'Too many requests. Please try again later.' },
+});
+
+// Root + health — used by Render / browser checks (HEAD / and GET /)
+app.get('/', (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'Job Portal API is running',
+    health: '/api/health',
+    docs: {
+      auth: '/api/auth',
+      jobs: '/api/jobs',
+      companies: '/api/companies',
+      applications: '/api/applications',
+      profiles: '/api/profiles',
+      admin: '/api/admin',
+    },
+  });
+});
+
+app.head('/', (req, res) => {
+  res.status(200).end();
 });
 
 app.get('/api/health', (req, res) => {

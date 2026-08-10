@@ -24,7 +24,8 @@ const errorHandler = (err, req, res, next) => {
     message = err.message;
   }
 
-  if (process.env.NODE_ENV !== 'production') {
+  // Avoid noisy logs for expected 404 health-check misses
+  if (statusCode >= 500 || (process.env.NODE_ENV !== 'production' && statusCode !== 404)) {
     console.error('[Error]', err);
   }
 
